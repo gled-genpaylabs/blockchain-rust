@@ -4,7 +4,7 @@ use super::*;
 use crate::block::*;
 use crate::blockchain::*;
 use crate::transaction::*;
-use bincode::{deserialize, serialize};
+use bincode::config;
 use sled;
 use std::collections::HashMap;
 
@@ -27,7 +27,7 @@ impl UTXOSet {
         for kv in db.iter() {
             let (k, v) = kv?;
             let txid = String::from_utf8(k.to_vec())?;
-            let outs: TXOutputs = deserialize(&v.to_vec())?;
+            let (outs, _): (TXOutputs, _) = bincode::decode_from_slice(&v, config::standard())?;
 
             for out_idx in 0..outs.outputs.len() {
                 if outs.outputs[out_idx].is_locked_with_key(pub_key_hash) && accumulated < amount {
@@ -54,7 +54,7 @@ impl UTXOSet {
 
         for kv in db.iter() {
             let (_, v) = kv?;
-            let outs: TXOutputs = deserialize(&v.to_vec())?;
+            let (outs, _): (TXOutputs, _) = bincode::decode_from_slice(&v, config::standard())?;
 
             for out in outs.outputs {
                 if out.is_locked_with_key(pub_key_hash) {
@@ -85,7 +85,10 @@ impl UTXOSet {
         let utxos = self.blockchain.find_UTXO();
 
         for (txid, outs) in utxos {
-            db.insert(txid.as_bytes(), serialize(&outs)?)?;
+            db.insert(
+                txid.as_bytes(),
+                bincode::encode_to_vec(&outs, config::standard())?,
+            )?;
         }
 
         Ok(())
@@ -103,7 +106,10 @@ impl UTXOSet {
                     let mut update_outputs = TXOutputs {
                         outputs: Vec::new(),
                     };
-                    let outs: TXOutputs = deserialize(&db.get(&vin.txid)?.unwrap().to_vec())?;
+                    let (outs, _): (TXOutputs, _) = bincode::decode_from_slice(
+                        &db.get(&vin.txid)?.unwrap(),
+                        config::standard(),
+                    )?;
                     for out_idx in 0..outs.outputs.len() {
                         if out_idx != vin.vout as usize {
                             update_outputs.outputs.push(outs.outputs[out_idx].clone());
@@ -113,7 +119,10 @@ impl UTXOSet {
                     if update_outputs.outputs.is_empty() {
                         db.remove(&vin.txid)?;
                     } else {
-                        db.insert(vin.txid.as_bytes(), serialize(&update_outputs)?)?;
+                        db.insert(
+                            vin.txid.as_bytes(),
+                            bincode::encode_to_vec(&update_outputs, config::standard())?,
+                        )?;
                     }
                 }
             }
@@ -125,7 +134,10 @@ impl UTXOSet {
                 new_outputs.outputs.push(out.clone());
             }
 
-            db.insert(tx.id.as_bytes(), serialize(&new_outputs)?)?;
+            db.insert(
+                tx.id.as_bytes(),
+                bincode::encode_to_vec(&new_outputs, config::standard())?,
+            )?;
         }
         Ok(())
     }

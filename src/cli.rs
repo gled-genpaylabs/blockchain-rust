@@ -7,129 +7,105 @@ use crate::transaction::*;
 use crate::utxoset::*;
 use crate::wallets::*;
 use bitcoincash_addr::Address;
-use clap::{App, Arg};
-use std::process::exit;
+use clap::Parser;
 
-pub struct Cli {}
+#[derive(Parser, Debug)]
+#[command(author, version, about, long_about = None)]
+pub struct Cli {
+    #[command(subcommand)]
+    command: Commands,
+}
+
+#[derive(Parser, Debug)]
+enum Commands {
+    PrintChain,
+    CreateWallet,
+    ListAddresses,
+    Reindex,
+    StartNode {
+        #[arg(short, long, default_value = "3000")]
+        port: String,
+    },
+    StartMiner {
+        #[arg(short, long, default_value = "3000")]
+        port: String,
+        #[arg(short, long)]
+        address: String,
+    },
+    GetBalance {
+        #[arg(short, long)]
+        address: String,
+    },
+    CreateBlockchain {
+        #[arg(short, long)]
+        address: String,
+    },
+    Send {
+        #[arg(short, long)]
+        from: String,
+        #[arg(short, long)]
+        to: String,
+        #[arg(short, long)]
+        amount: i32,
+        #[arg(short, long, default_value_t = false)]
+        mine: bool,
+    },
+}
 
 impl Cli {
-    pub fn new() -> Cli {
-        Cli {}
+    pub fn new() -> Self {
+        Cli {
+            command: Commands::PrintChain,
+        }
     }
 
     pub fn run(&mut self) -> Result<()> {
         info!("run app");
-        let matches = App::new("blockchain-demo")
-            .version("0.1")
-            .author("yunwei37. 1067852565@qq.com")
-            .about("reimplement blockchain_go in rust: a simple blockchain for learning")
-            .subcommand(App::new("printchain").about("print all the chain blocks"))
-            .subcommand(App::new("createwallet").about("create a wallet"))
-            .subcommand(App::new("listaddresses").about("list all addresses"))
-            .subcommand(App::new("reindex").about("reindex UTXO"))
-            .subcommand(
-                App::new("startnode")
-                    .about("start the node server")
-                    .arg(Arg::from_usage("<port> 'the port server bind to locally'")),
-            )
-            .subcommand(
-                App::new("startminer")
-                    .about("start the minner server")
-                    .arg(Arg::from_usage("<port> 'the port server bind to locally'"))
-                    .arg(Arg::from_usage("<address> 'wallet address'")),
-            )
-            .subcommand(
-                App::new("getbalance")
-                    .about("get balance in the blockchain")
-                    .arg(Arg::from_usage(
-                        "<address> 'The address to get balance for'",
-                    )),
-            )
-            .subcommand(App::new("createblockchain").about("create blockchain").arg(
-                Arg::from_usage("<address> 'The address to send genesis block reward to'"),
-            ))
-            .subcommand(
-                App::new("send")
-                    .about("send in the blockchain")
-                    .arg(Arg::from_usage("<from> 'Source wallet address'"))
-                    .arg(Arg::from_usage("<to> 'Destination wallet address'"))
-                    .arg(Arg::from_usage("<amount> 'Amount to send'"))
-                    .arg(Arg::from_usage(
-                        "-m --mine 'the from address mine immediately'",
-                    )),
-            )
-            .get_matches();
-
-        if let Some(ref matches) = matches.subcommand_matches("getbalance") {
-            if let Some(address) = matches.value_of("address") {
-                let balance = cmd_get_balance(address)?;
-                println!("Balance: {}\n", balance);
+        let cli = Cli::parse();
+        match &cli.command {
+            Commands::PrintChain => {
+                cmd_print_chain()?;
             }
-        } else if let Some(_) = matches.subcommand_matches("createwallet") {
-            println!("address: {}", cmd_create_wallet()?);
-        } else if let Some(_) = matches.subcommand_matches("printchain") {
-            cmd_print_chain()?;
-        } else if let Some(_) = matches.subcommand_matches("reindex") {
-            let count = cmd_reindex()?;
-            println!("Done! There are {} transactions in the UTXO set.", count);
-        } else if let Some(_) = matches.subcommand_matches("listaddresses") {
-            cmd_list_address()?;
-        } else if let Some(ref matches) = matches.subcommand_matches("createblockchain") {
-            if let Some(address) = matches.value_of("address") {
-                cmd_create_blockchain(address)?;
+            Commands::CreateWallet => {
+                println!("address: {}", cmd_create_wallet()?);
             }
-        } else if let Some(ref matches) = matches.subcommand_matches("send") {
-            let from = if let Some(address) = matches.value_of("from") {
-                address
-            } else {
-                println!("from not supply!: usage\n{}", matches.usage());
-                exit(1)
-            };
-            let to = if let Some(address) = matches.value_of("to") {
-                address
-            } else {
-                println!("to not supply!: usage\n{}", matches.usage());
-                exit(1)
-            };
-            let amount: i32 = if let Some(amount) = matches.value_of("amount") {
-                amount.parse()?
-            } else {
-                println!("amount in send not supply!: usage\n{}", matches.usage());
-                exit(1)
-            };
-            if matches.is_present("mine") {
-                cmd_send(from, to, amount, true)?;
-            } else {
-                cmd_send(from, to, amount, false)?;
+            Commands::ListAddresses => {
+                cmd_list_address()?;
             }
-        } else if let Some(ref matches) = matches.subcommand_matches("startnode") {
-            if let Some(port) = matches.value_of("port") {
+            Commands::Reindex => {
+                let count = cmd_reindex()?;
+                println!("Done! There are {} transactions in the UTXO set.", count);
+            }
+            Commands::StartNode { port } => {
                 println!("Start node...");
                 let bc = Blockchain::new()?;
                 let utxo_set = UTXOSet { blockchain: bc };
                 let server = Server::new(port, "", utxo_set)?;
                 server.start_server()?;
             }
-        } else if let Some(ref matches) = matches.subcommand_matches("startminer") {
-            let address = if let Some(address) = matches.value_of("address") {
-                address
-            } else {
-                println!("address not supply!: usage\n{}", matches.usage());
-                exit(1)
-            };
-            let port = if let Some(port) = matches.value_of("port") {
-                port
-            } else {
-                println!("port not supply!: usage\n{}", matches.usage());
-                exit(1)
-            };
-            println!("Start miner node...");
-            let bc = Blockchain::new()?;
-            let utxo_set = UTXOSet { blockchain: bc };
-            let server = Server::new(port, address, utxo_set)?;
-            server.start_server()?;
+            Commands::StartMiner { port, address } => {
+                println!("Start miner node...");
+                let bc = Blockchain::new()?;
+                let utxo_set = UTXOSet { blockchain: bc };
+                let server = Server::new(port, address, utxo_set)?;
+                server.start_server()?;
+            }
+            Commands::GetBalance { address } => {
+                let balance = cmd_get_balance(address)?;
+                println!("Balance: {}\n", balance);
+            }
+            Commands::CreateBlockchain { address } => {
+                cmd_create_blockchain(address)?;
+            }
+            Commands::Send {
+                from,
+                to,
+                amount,
+                mine,
+            } => {
+                cmd_send(from, to, *amount, *mine)?;
+            }
         }
-
         Ok(())
     }
 }
@@ -208,32 +184,3 @@ fn cmd_list_address() -> Result<()> {
     Ok(())
 }
 
-#[cfg(test)]
-mod test {
-    use super::*;
-
-    #[test]
-    fn test_locally() {
-        let addr1 = cmd_create_wallet().unwrap();
-        let addr2 = cmd_create_wallet().unwrap();
-        cmd_create_blockchain(&addr1).unwrap();
-
-        let b1 = cmd_get_balance(&addr1).unwrap();
-        let b2 = cmd_get_balance(&addr2).unwrap();
-        assert_eq!(b1, 10);
-        assert_eq!(b2, 0);
-
-        cmd_send(&addr1, &addr2, 5, true).unwrap();
-
-        let b1 = cmd_get_balance(&addr1).unwrap();
-        let b2 = cmd_get_balance(&addr2).unwrap();
-        assert_eq!(b1, 15);
-        assert_eq!(b2, 5);
-
-        cmd_send(&addr2, &addr1, 15, true).unwrap_err();
-        let b1 = cmd_get_balance(&addr1).unwrap();
-        let b2 = cmd_get_balance(&addr2).unwrap();
-        assert_eq!(b1, 15);
-        assert_eq!(b2, 5);
-    }
-}

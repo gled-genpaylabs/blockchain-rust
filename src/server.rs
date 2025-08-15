@@ -4,8 +4,7 @@ use super::*;
 use crate::block::*;
 use crate::transaction::*;
 use crate::utxoset::*;
-use bincode::{deserialize, serialize};
-use failure::format_err;
+use bincode::config;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::io::prelude::*;
@@ -14,7 +13,7 @@ use std::sync::*;
 use std::thread;
 use std::time::Duration;
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, bincode::Encode, bincode::Decode)]
 enum Message {
     Addr(Vec<String>),
     Version(Versionmsg),
@@ -25,38 +24,38 @@ enum Message {
     Block(Blockmsg),
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, bincode::Encode, bincode::Decode)]
 struct Blockmsg {
     addr_from: String,
     block: Block,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, bincode::Encode, bincode::Decode)]
 struct GetBlocksmsg {
     addr_from: String,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, bincode::Encode, bincode::Decode)]
 struct GetDatamsg {
     addr_from: String,
     kind: String,
     id: String,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, bincode::Encode, bincode::Decode)]
 struct Invmsg {
     addr_from: String,
     kind: String,
     items: Vec<String>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, bincode::Encode, bincode::Decode)]
 struct Txmsg {
     addr_from: String,
     transaction: Transaction,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, bincode::Encode, bincode::Decode)]
 struct Versionmsg {
     addr_from: String,
     version: i32,
@@ -259,14 +258,14 @@ impl Server {
             addr_from: self.node_address.clone(),
             block: b.clone(),
         };
-        let data = serialize(&(cmd_to_bytes("block"), data))?;
+        let data = bincode::encode_to_vec(&(cmd_to_bytes("block"), data), config::standard())?;
         self.send_data(addr, &data)
     }
 
     fn send_addr(&self, addr: &str) -> Result<()> {
         info!("send address info to: {}", addr);
         let nodes = self.get_known_nodes();
-        let data = serialize(&(cmd_to_bytes("addr"), nodes))?;
+        let data = bincode::encode_to_vec(&(cmd_to_bytes("addr"), nodes), config::standard())?;
         self.send_data(addr, &data)
     }
 
@@ -280,7 +279,7 @@ impl Server {
             kind: kind.to_string(),
             items,
         };
-        let data = serialize(&(cmd_to_bytes("inv"), data))?;
+        let data = bincode::encode_to_vec(&(cmd_to_bytes("inv"), data), config::standard())?;
         self.send_data(addr, &data)
     }
 
@@ -289,7 +288,7 @@ impl Server {
         let data = GetBlocksmsg {
             addr_from: self.node_address.clone(),
         };
-        let data = serialize(&(cmd_to_bytes("getblocks"), data))?;
+        let data = bincode::encode_to_vec(&(cmd_to_bytes("getblocks"), data), config::standard())?;
         self.send_data(addr, &data)
     }
 
@@ -303,7 +302,7 @@ impl Server {
             kind: kind.to_string(),
             id: id.to_string(),
         };
-        let data = serialize(&(cmd_to_bytes("getdata"), data))?;
+        let data = bincode::encode_to_vec(&(cmd_to_bytes("getdata"), data), config::standard())?;
         self.send_data(addr, &data)
     }
 
@@ -313,7 +312,7 @@ impl Server {
             addr_from: self.node_address.clone(),
             transaction: tx.clone(),
         };
-        let data = serialize(&(cmd_to_bytes("tx"), data))?;
+        let data = bincode::encode_to_vec(&(cmd_to_bytes("tx"), data), config::standard())?;
         self.send_data(addr, &data)
     }
 
@@ -324,7 +323,7 @@ impl Server {
             best_height: self.get_best_height()?,
             version: VERSION,
         };
-        let data = serialize(&(cmd_to_bytes("version"), data))?;
+        let data = bincode::encode_to_vec(&(cmd_to_bytes("version"), data), config::standard())?;
         self.send_data(addr, &data)
     }
 
@@ -518,28 +517,28 @@ fn bytes_to_cmd(bytes: &[u8]) -> Result<Message> {
     info!("cmd: {}", String::from_utf8(cmd.clone())?);
 
     if cmd == "addr".as_bytes() {
-        let data: Vec<String> = deserialize(data)?;
+        let (data, _) = bincode::decode_from_slice(data, config::standard())?;
         Ok(Message::Addr(data))
     } else if cmd == "block".as_bytes() {
-        let data: Blockmsg = deserialize(data)?;
+        let (data, _) = bincode::decode_from_slice(data, config::standard())?;
         Ok(Message::Block(data))
     } else if cmd == "inv".as_bytes() {
-        let data: Invmsg = deserialize(data)?;
+        let (data, _) = bincode::decode_from_slice(data, config::standard())?;
         Ok(Message::Inv(data))
     } else if cmd == "getblocks".as_bytes() {
-        let data: GetBlocksmsg = deserialize(data)?;
+        let (data, _) = bincode::decode_from_slice(data, config::standard())?;
         Ok(Message::GetBlock(data))
     } else if cmd == "getdata".as_bytes() {
-        let data: GetDatamsg = deserialize(data)?;
+        let (data, _) = bincode::decode_from_slice(data, config::standard())?;
         Ok(Message::GetData(data))
     } else if cmd == "tx".as_bytes() {
-        let data: Txmsg = deserialize(data)?;
+        let (data, _) = bincode::decode_from_slice(data, config::standard())?;
         Ok(Message::Tx(data))
     } else if cmd == "version".as_bytes() {
-        let data: Versionmsg = deserialize(data)?;
+        let (data, _) = bincode::decode_from_slice(data, config::standard())?;
         Ok(Message::Version(data))
     } else {
-        Err(format_err!("Unknown command in the server"))
+        Err(anyhow::anyhow!("Unknown command in the server"))
     }
 }
 
@@ -562,7 +561,7 @@ mod test {
             best_height: server.get_best_height().unwrap(),
             version: VERSION,
         };
-        let data = serialize(&(cmd_to_bytes("version"), vmsg.clone())).unwrap();
+        let data = bincode::encode_to_vec(&(cmd_to_bytes("version"), vmsg.clone()), config::standard()).unwrap();
         if let Message::Version(v) = bytes_to_cmd(&data).unwrap() {
             assert_eq!(v, vmsg);
         } else {

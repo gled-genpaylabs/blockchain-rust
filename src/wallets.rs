@@ -1,32 +1,32 @@
 //! bitcoin wallet
 
 use super::*;
-use bincode::{deserialize, serialize};
+use bincode::config;
 use bitcoincash_addr::*;
-use crypto::digest::Digest;
-use crypto::ed25519;
-use crypto::ripemd160::Ripemd160;
-use crypto::sha2::Sha256;
-use rand::Rng;
+use ed25519_dalek::SigningKey;
+use rand::rngs::OsRng;
+use ripemd::{Digest, Ripemd160};
 use serde::{Deserialize, Serialize};
+use sha2::Sha256;
 use sled;
 use std::collections::HashMap;
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, bincode::Encode, bincode::Decode)]
 pub struct Wallet {
     pub secret_key: Vec<u8>,
     pub public_key: Vec<u8>,
 }
 
+use rand::RngCore;
 impl Wallet {
     /// NewWallet creates and returns a Wallet
     fn new() -> Self {
-        let mut key: [u8; 32] = [0; 32];
-        let mut rand = rand::OsRng::new().unwrap();
-        rand.fill_bytes(&mut key);
-        let (secret_key, public_key) = ed25519::keypair(&key);
-        let secret_key = secret_key.to_vec();
-        let public_key = public_key.to_vec();
+        let mut rng = OsRng;
+        let mut byte_array = [0u8; 32];
+        rng.fill_bytes(&mut byte_array);
+        let keypair = SigningKey::from_bytes(&byte_array);
+        let secret_key = keypair.to_bytes().to_vec();
+        let public_key = keypair.verifying_key().to_bytes().to_vec();
         Wallet {
             secret_key,
             public_key,
@@ -50,12 +50,15 @@ impl Wallet {
 /// HashPubKey hashes public key
 pub fn hash_pub_key(pubKey: &mut Vec<u8>) {
     let mut hasher1 = Sha256::new();
-    hasher1.input(pubKey);
-    hasher1.result(pubKey);
+    hasher1.update(pubKey.as_slice());
+    let hashed_key = hasher1.finalize();
+
     let mut hasher2 = Ripemd160::new();
-    hasher2.input(pubKey);
+    hasher2.update(&hashed_key);
+    let hashed_key = hasher2.finalize();
+
     pubKey.resize(20, 0);
-    hasher2.result(pubKey);
+    pubKey.copy_from_slice(&hashed_key);
 }
 
 pub struct Wallets {
@@ -73,7 +76,7 @@ impl Wallets {
         for item in db.into_iter() {
             let i = item?;
             let address = String::from_utf8(i.0.to_vec())?;
-            let wallet = deserialize(&i.1.to_vec())?;
+            let (wallet, _) = bincode::decode_from_slice(&i.1, config::standard())?;
             wlt.wallets.insert(address, wallet);
         }
         drop(db);
@@ -108,7 +111,7 @@ impl Wallets {
         let db = sled::open("data/wallets")?;
 
         for (address, wallet) in &self.wallets {
-            let data = serialize(wallet)?;
+            let data = bincode::encode_to_vec(wallet, config::standard())?;
             db.insert(address, data)?;
         }
 
@@ -121,6 +124,7 @@ impl Wallets {
 #[cfg(test)]
 mod test {
     use super::*;
+    use ed25519_dalek::{Signer, Verifier, VerifyingKey};
 
     #[test]
     fn test_create_wallet_and_hash() {
@@ -159,11 +163,9 @@ mod test {
     #[test]
     fn test_signature() {
         let w = Wallet::new();
-        let signature = ed25519::signature("test".as_bytes(), &w.secret_key);
-        assert!(ed25519::verify(
-            "test".as_bytes(),
-            &w.public_key,
-            &signature
-        ));
+        let keypair = SigningKey::from_bytes(&w.secret_key.try_into().unwrap());
+        let signature = keypair.sign("test".as_bytes());
+        let verifying_key = VerifyingKey::from_bytes(&w.public_key.try_into().unwrap()).unwrap();
+        assert!(verifying_key.verify("test".as_bytes(), &signature).is_ok());
     }
 }

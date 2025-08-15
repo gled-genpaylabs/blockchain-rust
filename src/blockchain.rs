@@ -3,8 +3,7 @@
 use super::*;
 use crate::block::*;
 use crate::transaction::*;
-use bincode::{deserialize, serialize};
-use failure::format_err;
+use bincode::config;
 use sled;
 use std::collections::HashMap;
 
@@ -52,7 +51,10 @@ impl Blockchain {
         debug!("Creating new block database");
         let cbtx = Transaction::new_coinbase(address, String::from(GENESIS_COINBASE_DATA))?;
         let genesis: Block = Block::new_genesis_block(cbtx);
-        db.insert(genesis.get_hash(), serialize(&genesis)?)?;
+        db.insert(
+            genesis.get_hash(),
+            bincode::encode_to_vec(&genesis, config::standard())?,
+        )?;
         db.insert("LAST", genesis.get_hash().as_bytes())?;
         let bc = Blockchain {
             tip: genesis.get_hash(),
@@ -68,7 +70,7 @@ impl Blockchain {
 
         for tx in &transactions {
             if !self.verify_transacton(tx)? {
-                return Err(format_err!("ERROR: Invalid transaction"));
+                return Err(anyhow::anyhow!("ERROR: Invalid transaction"));
             }
         }
 
@@ -79,7 +81,10 @@ impl Blockchain {
             String::from_utf8(lasthash.to_vec())?,
             self.get_best_height()? + 1,
         )?;
-        self.db.insert(newblock.get_hash(), serialize(&newblock)?)?;
+        self.db.insert(
+            newblock.get_hash(),
+            bincode::encode_to_vec(&newblock, config::standard())?,
+        )?;
         self.db.insert("LAST", newblock.get_hash().as_bytes())?;
         self.db.flush()?;
 
@@ -151,7 +156,7 @@ impl Blockchain {
                 }
             }
         }
-        Err(format_err!("Transaction is not found"))
+        Err(anyhow::anyhow!("Transaction is not found"))
     }
 
     fn get_prev_TXs(&self, tx: &Transaction) -> Result<HashMap<String, Transaction>> {
@@ -181,7 +186,7 @@ impl Blockchain {
 
     /// AddBlock saves the block into the blockchain
     pub fn add_block(&mut self, block: Block) -> Result<()> {
-        let data = serialize(&block)?;
+        let data = bincode::encode_to_vec(&block, config::standard())?;
         if let Some(_) = self.db.get(block.get_hash())? {
             return Ok(());
         }
@@ -199,7 +204,7 @@ impl Blockchain {
     // GetBlock finds a block by its hash and returns it
     pub fn get_block(&self, block_hash: &str) -> Result<Block> {
         let data = self.db.get(block_hash)?.unwrap();
-        let block = deserialize(&data.to_vec())?;
+        let (block, _) = bincode::decode_from_slice(&data, config::standard())?;
         Ok(block)
     }
 
@@ -211,7 +216,8 @@ impl Blockchain {
             return Ok(-1);
         };
         let last_data = self.db.get(lasthash)?.unwrap();
-        let last_block: Block = deserialize(&last_data.to_vec())?;
+        let (last_block, _): (Block, _) =
+            bincode::decode_from_slice(&last_data, config::standard())?;
         Ok(last_block.get_height())
     }
 
@@ -232,7 +238,7 @@ impl<'a> Iterator for BlockchainIterator<'a> {
         if let Ok(encoded_block) = self.bc.db.get(&self.current_hash) {
             return match encoded_block {
                 Some(b) => {
-                    if let Ok(block) = deserialize::<Block>(&b) {
+                    if let Ok((block, _)) = bincode::decode_from_slice::<Block, _>(&b, config::standard()) {
                         self.current_hash = block.get_prev_hash();
                         Some(block)
                     } else {
