@@ -3,20 +3,17 @@
 use super::*;
 use crate::utxoset::*;
 use crate::wallets::*;
-use bincode::serialize;
+use bincode::config;
 use bitcoincash_addr::Address;
-use crypto::digest::Digest;
-use crypto::ed25519;
-use crypto::sha2::Sha256;
-use failure::format_err;
-use rand::Rng;
+use ed25519_dalek::{Signature, Signer, Verifier, VerifyingKey};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 
 const SUBSIDY: i32 = 10;
 
 /// TXInput represents a transaction input
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, bincode::Encode, bincode::Decode)]
 pub struct TXInput {
     pub txid: String,
     pub vout: i32,
@@ -25,20 +22,20 @@ pub struct TXInput {
 }
 
 /// TXOutput represents a transaction output
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, bincode::Encode, bincode::Decode)]
 pub struct TXOutput {
     pub value: i32,
     pub pub_key_hash: Vec<u8>,
 }
 
 // TXOutputs collects TXOutput
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, bincode::Encode, bincode::Decode)]
 pub struct TXOutputs {
     pub outputs: Vec<TXOutput>,
 }
 
 /// Transaction represents a Bitcoin transaction
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, bincode::Encode, bincode::Decode)]
 pub struct Transaction {
     pub id: String,
     pub vin: Vec<TXInput>,
@@ -62,7 +59,7 @@ impl Transaction {
 
         if acc_v.0 < amount {
             error!("Not Enough balance");
-            return Err(format_err!(
+            return Err(anyhow::anyhow!(
                 "Not Enough balance: current balance {}",
                 acc_v.0
             ));
@@ -99,14 +96,10 @@ impl Transaction {
     /// NewCoinbaseTX creates a new coinbase transaction
     pub fn new_coinbase(to: String, mut data: String) -> Result<Transaction> {
         info!("new coinbase Transaction to: {}", to);
-        let mut key: [u8; 32] = [0; 32];
         if data.is_empty() {
-            let mut rand = rand::OsRng::new().unwrap();
-            rand.fill_bytes(&mut key);
             data = format!("Reward to '{}'", to);
         }
-        let mut pub_key = Vec::from(data.as_bytes());
-        pub_key.append(&mut Vec::from(key));
+        let pub_key = Vec::from(data.as_bytes());
 
         let mut tx = Transaction {
             id: String::new(),
@@ -135,7 +128,7 @@ impl Transaction {
 
         for vin in &self.vin {
             if prev_TXs.get(&vin.txid).unwrap().id.is_empty() {
-                return Err(format_err!("ERROR: Previous transaction is not correct"));
+                return Err(anyhow::anyhow!("ERROR: Previous transaction is not correct"));
             }
         }
 
@@ -150,11 +143,9 @@ impl Transaction {
             tx_copy.id = tx_copy.hash()?;
             tx_copy.vin[in_id].pub_key = Vec::new();
 
-            if !ed25519::verify(
-                &tx_copy.id.as_bytes(),
-                &self.vin[in_id].pub_key,
-                &self.vin[in_id].signature,
-            ) {
+            let verifying_key = VerifyingKey::from_bytes(&self.vin[in_id].pub_key.clone().try_into().unwrap())?;
+            let signature = Signature::from_bytes(&self.vin[in_id].signature.clone().try_into().unwrap());
+            if verifying_key.verify(tx_copy.id.as_bytes(), &signature).is_err() {
                 return Ok(false);
             }
         }
@@ -174,7 +165,7 @@ impl Transaction {
 
         for vin in &self.vin {
             if prev_TXs.get(&vin.txid).unwrap().id.is_empty() {
-                return Err(format_err!("ERROR: Previous transaction is not correct"));
+                return Err(anyhow::anyhow!("ERROR: Previous transaction is not correct"));
             }
         }
 
@@ -188,8 +179,9 @@ impl Transaction {
                 .clone();
             tx_copy.id = tx_copy.hash()?;
             tx_copy.vin[in_id].pub_key = Vec::new();
-            let signature = ed25519::signature(tx_copy.id.as_bytes(), private_key);
-            self.vin[in_id].signature = signature.to_vec();
+            let keypair = ed25519_dalek::SigningKey::from_bytes(private_key.try_into().unwrap());
+            let signature = keypair.sign(tx_copy.id.as_bytes());
+            self.vin[in_id].signature = signature.to_bytes().to_vec();
         }
 
         Ok(())
@@ -199,10 +191,10 @@ impl Transaction {
     pub fn hash(&self) -> Result<String> {
         let mut copy = self.clone();
         copy.id = String::new();
-        let data = serialize(&copy)?;
+        let data = bincode::encode_to_vec(&copy, config::standard())?;
         let mut hasher = Sha256::new();
-        hasher.input(&data[..]);
-        Ok(hasher.result_str())
+        hasher.update(&data[..]);
+        Ok(hex::encode(hasher.finalize()))
     }
 
     /// TrimmedCopy creates a trimmed copy of Transaction to be used in signing
@@ -260,6 +252,7 @@ impl TXOutput {
 #[cfg(test)]
 mod test {
     use super::*;
+    use ed25519_dalek::SigningKey;
 
     #[test]
     fn test_signature() {
@@ -273,7 +266,8 @@ mod test {
         let tx = Transaction::new_coinbase(wa1, data).unwrap();
         assert!(tx.is_coinbase());
 
-        let signature = ed25519::signature(tx.id.as_bytes(), &w.secret_key);
-        assert!(ed25519::verify(tx.id.as_bytes(), &w.public_key, &signature));
+        let keypair = SigningKey::from_bytes(&w.secret_key.try_into().unwrap());
+        let signature = keypair.sign(tx.id.as_bytes());
+        assert!(keypair.verify(tx.id.as_bytes(), &signature).is_ok());
     }
 }

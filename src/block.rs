@@ -2,18 +2,17 @@
 
 use super::*;
 use crate::transaction::Transaction;
-use bincode::serialize;
-use crypto::digest::Digest;
-use crypto::sha2::Sha256;
+use bincode::{self, config};
 use merkle_cbt::merkle_tree::Merge;
 use merkle_cbt::merkle_tree::CBMT;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::time::SystemTime;
 
 const TARGET_HEXS: usize = 4;
 
 /// Block keeps block headers
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, bincode::Encode, bincode::Decode)]
 pub struct Block {
     timestamp: u128,
     transactions: Vec<Transaction>,
@@ -74,8 +73,8 @@ impl Block {
         }
         let data = self.prepare_hash_data()?;
         let mut hasher = Sha256::new();
-        hasher.input(&data[..]);
-        self.hash = hasher.result_str();
+        hasher.update(&data[..]);
+        self.hash = hex::encode(hasher.finalize());
         Ok(())
     }
 
@@ -85,7 +84,7 @@ impl Block {
         for tx in &self.transactions {
             transactions.push(tx.hash()?.as_bytes().to_owned());
         }
-        let tree = CBMT::<Vec<u8>, MergeVu8>::build_merkle_tree(transactions);
+        let tree = CBMT::<Vec<u8>, MergeVu8>::build_merkle_tree(&transactions);
 
         Ok(tree.root())
     }
@@ -98,7 +97,7 @@ impl Block {
             TARGET_HEXS,
             self.nonce,
         );
-        let bytes = serialize(&content)?;
+        let bytes = bincode::encode_to_vec(&content, config::standard())?;
         Ok(bytes)
     }
 
@@ -106,10 +105,10 @@ impl Block {
     fn validate(&self) -> Result<bool> {
         let data = self.prepare_hash_data()?;
         let mut hasher = Sha256::new();
-        hasher.input(&data[..]);
+        hasher.update(&data[..]);
         let mut vec1: Vec<u8> = Vec::new();
         vec1.resize(TARGET_HEXS, '0' as u8);
-        Ok(&hasher.result_str()[0..TARGET_HEXS] == String::from_utf8(vec1)?)
+        Ok(&hex::encode(hasher.finalize())[0..TARGET_HEXS] == String::from_utf8(vec1)?)
     }
 }
 
@@ -121,9 +120,7 @@ impl Merge for MergeVu8 {
         let mut hasher = Sha256::new();
         let mut data: Vec<u8> = left.clone();
         data.append(&mut right.clone());
-        hasher.input(&data);
-        let mut re: [u8; 32] = [0; 32];
-        hasher.result(&mut re);
-        re.to_vec()
+        hasher.update(&data);
+        hasher.finalize().to_vec()
     }
 }
